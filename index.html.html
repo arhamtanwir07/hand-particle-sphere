@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Particle Sphere — Hand Controlled</title>
+<style>
+  :root{
+    --bg: #06060a;
+    --fg: #eae7df;
+    --dim: #7a7a86;
+    --accent: #9fd8ff;
+    --line: rgba(255,255,255,0.08);
+  }
+  *{ box-sizing: border-box; }
+  html, body{
+    margin:0; padding:0; width:100%; height:100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+ 
+  /* ---------- layers ---------- */
+  #webcam{
+    position: fixed; inset:0;
+    width:100%; height:100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    opacity: 0;
+    transition: opacity .5s ease;
+    pointer-events: none;
+    z-index: 0;
+    filter: brightness(0.55) saturate(0.9);
+  }
+  #webcam.visible{ opacity: 1; }
+ 
+  #glcanvas{
+    position: fixed; inset:0;
+    width:100%; height:100%;
+    z-index: 1;
+    display:block;
+  }
+ 
+  #overlay{
+    position: fixed; inset:0;
+    width:100%; height:100%;
+    z-index: 2;
+    pointer-events: none;
+  }
+ 
+  #vignette{
+    position: fixed; inset:0;
+    z-index: 2;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.55) 100%);
+  }
+ 
+  /* ---------- UI ---------- */
+  #ui{
+    position: fixed; top: 28px; left: 34px;
+    z-index: 5; pointer-events: none;
+  }
+  #ui .title{
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif;
+    font-size: 26px;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+    color: var(--fg);
+    margin: 0;
+  }
+  #ui .subtitle{
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-top: 6px;
+    font-weight: 400;
+  }
+ 
+  #status{
+    position: fixed; top: 30px; right: 34px;
+    z-index: 5;
+    text-align: right;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--dim);
+    line-height: 1.9;
+    font-variant-numeric: tabular-nums;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  #status span{ color: var(--fg); font-weight: 500; }
+  #status .dot{
+    display:inline-block; width:6px; height:6px; border-radius:50%;
+    background: var(--dim); margin-left:6px;
+    transition: background .2s ease;
+  }
+  #status .dot.on{ background: #7CFFA0; box-shadow: 0 0 8px #7CFFA0; }
+ 
+  #controls{
+    position: fixed; bottom: 30px; left: 34px;
+    z-index: 5;
+    display:flex; gap: 10px; align-items:center;
+  }
+  button#webcamToggle{
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--line);
+    color: var(--fg);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 11px 18px;
+    border-radius: 30px;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: all .2s ease;
+  }
+  button#webcamToggle:hover{
+    background: rgba(255,255,255,0.09);
+    border-color: rgba(255,255,255,0.18);
+  }
+ 
+  #hint{
+    position: fixed; bottom: 30px; right: 34px;
+    z-index: 5;
+    font-size: 10.5px;
+    letter-spacing: 1px;
+    color: var(--dim);
+    max-width: 260px;
+    text-align: right;
+    line-height: 1.7;
+    pointer-events: none;
+  }
+ 
+  #loading{
+    position: fixed; inset:0; z-index: 10;
+    background: var(--bg);
+    display:flex; align-items:center; justify-content:center;
+    flex-direction: column;
+    gap: 14px;
+    transition: opacity .6s ease;
+  }
+  #loading .spin{
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.12);
+    border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  #loading p{
+    font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--dim); margin:0;
+  }
+  #loading.hidden{ opacity:0; pointer-events:none; }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+ 
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="glcanvas"></canvas>
+  <canvas id="overlay"></canvas>
+  <div id="vignette"></div>
+ 
+  <div id="ui">
+    <p class="title">Particle Sphere</p>
+    <p class="subtitle">hand-reactive field · 4000 points</p>
+  </div>
+ 
+  <div id="status">
+    HANDS <span id="sHands">0</span><span id="dotHands" class="dot"></span><br/>
+    FINGERS <span id="sFingers">0</span><br/>
+    GESTURE <span id="sGesture">idle</span><br/>
+    CHARGE <span id="sCharge">0%</span>
+  </div>
+ 
+  <div id="controls">
+    <button id="webcamToggle">Show Webcam</button>
+  </div>
+ 
+  <div id="hint">
+    ONE HAND — move / rotate&nbsp;&nbsp;·&nbsp;&nbsp;PINCH &amp; HOLD — charge<br/>
+    TWO HANDS — spread to glow, close to shrink&nbsp;&nbsp;·&nbsp;&nbsp;FINGERS — color
+  </div>
+ 
+  <div id="loading">
+    <div class="spin"></div>
+    <p>Requesting camera…</p>
+  </div>
+ 
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+ 
+<script>
+(function(){
+  "use strict";
+ 
+  /* ============================================================
+     CONSTANTS
+  ============================================================ */
+  const PARTICLE_COUNT   = 4000;
+  const SPHERE_RADIUS    = 2.1;
+  const PINCH_THRESHOLD  = 0.055;
+  const CHARGE_DURATION  = 1100; // ms to fill the ring
+ 
+  /* ============================================================
+     THREE.JS SETUP
+  ============================================================ */
+  const glcanvas = document.getElementById('glcanvas');
+  const renderer = new THREE.WebGLRenderer({ canvas: glcanvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 0);
+ 
+  const scene = new THREE.Scene();
+  const camera3 = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
+  camera3.position.set(0, 0, 7);
+ 
+  function resize(){
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera3.aspect = window.innerWidth/window.innerHeight;
+    camera3.updateProjectionMatrix();
+    overlay.width = window.innerWidth * devicePixelRatio;
+    overlay.height = window.innerHeight * devicePixelRatio;
+    overlay.style.width = window.innerWidth+'px';
+    overlay.style.height = window.innerHeight+'px';
+  }
+  window.addEventListener('resize', resize);
+ 
+  // ---- glow sprite (soft radial gradient behind the sphere) ----
+  function makeGlowTexture(){
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    g.addColorStop(0, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.4, 'rgba(255,255,255,0.25)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,size,size);
+    return new THREE.CanvasTexture(c);
+  }
+  const glowMat = new THREE.SpriteMaterial({
+    map: makeGlowTexture(),
+    color: 0x9fd8ff,
+    transparent: true,
+    opacity: 0.12,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+  const glowSprite = new THREE.Sprite(glowMat);
+  glowSprite.scale.set(4.5, 4.5, 1);
+  scene.add(glowSprite);
+ 
+  // ---- particle sphere (fibonacci distribution) ----
+  const sphereGroup = new THREE.Group();
+  scene.add(sphereGroup);
+ 
+  const positions = new Float32Array(PARTICLE_COUNT*3);
+  const colors    = new Float32Array(PARTICLE_COUNT*3);
+  const shades    = new Float32Array(PARTICLE_COUNT);
+ 
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i=0; i<PARTICLE_COUNT; i++){
+    const y = 1 - (i/(PARTICLE_COUNT-1))*2;
+    const r = Math.sqrt(Math.max(0, 1 - y*y));
+    const theta = golden * i;
+    const x = Math.cos(theta) * r;
+    const z = Math.sin(theta) * r;
+    const jitter = 1 + (Math.random()-0.5) * 0.06;
+ 
+    positions[i*3]   = x * SPHERE_RADIUS * jitter;
+    positions[i*3+1] = y * SPHERE_RADIUS * jitter;
+    positions[i*3+2] = z * SPHERE_RADIUS * jitter;
+ 
+    shades[i] = 0.75 + Math.random()*0.5;
+    colors[i*3]=1; colors[i*3+1]=1; colors[i*3+2]=1;
+  }
+ 
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+ 
+  const material = new THREE.PointsMaterial({
+    size: 0.045,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.92,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true
+  });
+ 
+  const points = new THREE.Points(geometry, material);
+  sphereGroup.add(points);
+ 
+  const colorObj = new THREE.Color();
+  function updateParticleColors(hue, glowBoost, burst){
+    const attr = geometry.attributes.color;
+    for (let i=0; i<PARTICLE_COUNT; i++){
+      const lightness = Math.min(0.82, 0.36 * shades[i] + glowBoost*0.22 + burst*0.3);
+      colorObj.setHSL(hue, 0.7, lightness);
+      attr.setXYZ(i, colorObj.r, colorObj.g, colorObj.b);
+    }
+    attr.needsUpdate = true;
+  }
+ 
+  /* ============================================================
+     OVERLAY CANVAS (charge ring)
+  ============================================================ */
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d');
+ 
+  function drawOverlay(){
+    octx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    octx.clearRect(0,0,window.innerWidth, window.innerHeight);
+    if (!state.pinchPos || state.chargeProgress <= 0) return;
+ 
+    const x = state.pinchPos.x * window.innerWidth;
+    const y = state.pinchPos.y * window.innerHeight;
+    const radius = 34;
+ 
+    octx.beginPath();
+    octx.arc(x, y, radius, 0, Math.PI*2);
+    octx.strokeStyle = 'rgba(255,255,255,0.12)';
+    octx.lineWidth = 3;
+    octx.stroke();
+ 
+    octx.beginPath();
+    octx.arc(x, y, radius, -Math.PI/2, -Math.PI/2 + Math.PI*2*state.chargeProgress);
+    octx.strokeStyle = state.charged ? '#ffffff' : '#9fd8ff';
+    octx.lineWidth = 3;
+    octx.lineCap = 'round';
+    octx.stroke();
+ 
+    octx.beginPath();
+    octx.arc(x, y, 3.5, 0, Math.PI*2);
+    octx.fillStyle = state.charged ? '#ffffff' : '#9fd8ff';
+    octx.fill();
+  }
+ 
+  /* ============================================================
+     HAND STATE
+  ============================================================ */
+  const state = {
+    handsCount: 0,
+    fingerCount: 0,
+    gesture: 'idle',
+    pinchPos: null,
+    chargeProgress: 0,
+    chargeStart: null,
+    charged: false
+  };
+ 
+  let prevSinglePos = null;
+  let targetPos = { x:0, y:0 };
+  let targetRot = { x:0, y:0 };
+  let targetScale = 1;
+  let targetGlow  = 0.15;
+  let targetHue   = 0.56; // starting cool blue
+  let burstPulse  = 0;
+ 
+  const currentPos   = { x:0, y:0 };
+  const currentRot   = { x:0, y:0 };
+  let currentScale   = 1;
+  let currentGlow    = 0.15;
+  let currentHue     = 0.56;
+ 
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max,v)); }
+  function dist2D(a,b){
+    const dx=a.x-b.x, dy=a.y-b.y;
+    return Math.sqrt(dx*dx+dy*dy);
+  }
+ 
+  function countFingers(lm){
+    const wrist = lm[0];
+    let count = 0;
+ 
+    // thumb — distance based (works regardless of hand orientation)
+    if (dist2D(lm[4], wrist) > dist2D(lm[2], wrist) * 1.15) count++;
+ 
+    const tips = [8,12,16,20];
+    const pips = [6,10,14,18];
+    for (let i=0;i<4;i++){
+      if (dist2D(lm[tips[i]], wrist) > dist2D(lm[pips[i]], wrist) * 1.12) count++;
+    }
+    return count;
+  }
+ 
+  function handlePinch(active, mx, my){
+    if (active){
+      if (!state.chargeStart) state.chargeStart = performance.now();
+      state.pinchPos = { x: mx, y: my };
+      const elapsed = performance.now() - state.chargeStart;
+      state.chargeProgress = clamp(elapsed / CHARGE_DURATION, 0, 1);
+      if (state.chargeProgress >= 1 && !state.charged){
+        state.charged = true;
+        burstPulse = 1;
+      }
+    } else {
+      state.chargeStart = null;
+      state.chargeProgress = 0;
+      state.charged = false;
+      state.pinchPos = null;
+    }
+  }
+ 
+  function onResults(results){
+    const hands = results.multiHandLandmarks || [];
+    state.handsCount = hands.length;
+ 
+    if (hands.length === 1){
+      const lm = hands[0];
+      const palm = lm[9];
+      const mx = 1 - palm.x; // mirror to match mirrored video
+      const my = palm.y;
+ 
+      targetPos.x = (mx - 0.5) * 8.5;
+      targetPos.y = (0.5 - my) * 6.5;
+ 
+      if (prevSinglePos){
+        const dx = mx - prevSinglePos.x;
+        const dy = my - prevSinglePos.y;
+        targetRot.y += dx * 7;
+        targetRot.x += dy * 7;
+      }
+      prevSinglePos = { x: mx, y: my };
+ 
+      const thumbTip = lm[4], indexTip = lm[8];
+      const pinchDist = dist2D(thumbTip, indexTip);
+      handlePinch(pinchDist < PINCH_THRESHOLD, mx, my);
+ 
+      state.fingerCount = countFingers(lm);
+      targetHue = clamp(state.fingerCount / 5, 0, 1) * 0.78; // red -> violet sweep
+      state.gesture = state.charged ? 'charged!' : (pinchDist < PINCH_THRESHOLD ? 'pinching' : 'move / rotate');
+ 
+    } else if (hands.length === 2){
+      prevSinglePos = null;
+      handlePinch(false, 0, 0);
+ 
+      const p1 = hands[0][9], p2 = hands[1][9];
+      const d = dist2D(p1, p2);
+      const t = clamp((d - 0.15) / (0.65 - 0.15), 0, 1);
+      targetScale = lerp(0.55, 2.3, t);
+      targetGlow  = t;
+ 
+      const total = countFingers(hands[0]) + countFingers(hands[1]);
+      state.fingerCount = total;
+      targetHue = clamp(total / 10, 0, 1) * 0.9;
+      state.gesture = t > 0.5 ? 'spreading (glow)' : 'closing (shrink)';
+ 
+    } else {
+      prevSinglePos = null;
+      handlePinch(false, 0, 0);
+      state.gesture = 'idle';
+    }
+ 
+    updateStatus();
+  }
+ 
+  /* ============================================================
+     STATUS PANEL
+  ============================================================ */
+  const sHands = document.getElementById('sHands');
+  const sFingers = document.getElementById('sFingers');
+  const sGesture = document.getElementById('sGesture');
+  const sCharge = document.getElementById('sCharge');
+  const dotHands = document.getElementById('dotHands');
+ 
+  function updateStatus(){
+    sHands.textContent = state.handsCount;
+    dotHands.classList.toggle('on', state.handsCount > 0);
+    sFingers.textContent = state.fingerCount;
+    sGesture.textContent = state.gesture;
+    sCharge.textContent = Math.round(state.chargeProgress*100) + '%';
+  }
+ 
+  /* ============================================================
+     MEDIAPIPE HANDS SETUP
+  ============================================================ */
+  const videoElement = document.getElementById('webcam');
+  const loading = document.getElementById('loading');
+ 
+  const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6
+  });
+  hands.onResults(onResults);
+ 
+  let firstFrame = true;
+  const mpCamera = new Camera(videoElement, {
+    onFrame: async () => {
+      await hands.send({ image: videoElement });
+      if (firstFrame){
+        firstFrame = false;
+        loading.classList.add('hidden');
+      }
+    },
+    width: 640,
+    height: 480
+  });
+ 
+  mpCamera.start().catch((err) => {
+    const p = loading.querySelector('p');
+    p.textContent = 'Camera access denied — please allow webcam permissions and reload.';
+    loading.querySelector('.spin').style.display = 'none';
+    console.error(err);
+  });
+ 
+  /* ============================================================
+     WEBCAM TOGGLE
+  ============================================================ */
+  const toggleBtn = document.getElementById('webcamToggle');
+  toggleBtn.addEventListener('click', () => {
+    const visible = videoElement.classList.toggle('visible');
+    toggleBtn.textContent = visible ? 'Hide Webcam' : 'Show Webcam';
+  });
+ 
+  /* ============================================================
+     ANIMATION LOOP
+  ============================================================ */
+  function animate(){
+    requestAnimationFrame(animate);
+ 
+    currentPos.x = lerp(currentPos.x, targetPos.x, 0.08);
+    currentPos.y = lerp(currentPos.y, targetPos.y, 0.08);
+    currentRot.x = lerp(currentRot.x, targetRot.x, 0.12);
+    currentRot.y = lerp(currentRot.y, targetRot.y, 0.12);
+    currentScale = lerp(currentScale, targetScale, 0.07);
+    currentGlow  = lerp(currentGlow, targetGlow, 0.06);
+    currentHue   = lerp(currentHue, targetHue, 0.05);
+ 
+    burstPulse = lerp(burstPulse, 0, 0.08);
+ 
+    if (state.handsCount === 0){
+      targetRot.y += 0.0025; // gentle idle drift
+    }
+ 
+    sphereGroup.position.set(currentPos.x, currentPos.y, 0);
+    sphereGroup.rotation.set(currentRot.x, currentRot.y, 0);
+    const finalScale = currentScale + burstPulse*0.35;
+    sphereGroup.scale.set(finalScale, finalScale, finalScale);
+ 
+    glowSprite.position.set(currentPos.x, currentPos.y, -0.5);
+    glowSprite.material.opacity = 0.1 + currentGlow*0.55 + burstPulse*0.3;
+    const glowScale = (4.2 + currentGlow*5) * (finalScale/currentScale || 1) * (finalScale);
+    glowSprite.scale.set(glowScale*0.55, glowScale*0.55, 1);
+ 
+    updateParticleColors(currentHue, currentGlow, burstPulse);
+    drawOverlay();
+ 
+    renderer.render(scene, camera3);
+  }
+ 
+  resize();
+  updateParticleColors(currentHue, currentGlow, 0);
+  animate();
+ 
+})();
+</script>
+</body>
+</html>
